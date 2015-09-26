@@ -1,10 +1,13 @@
 #include "wavedev.h"
+#include "midi.h"
+#include "note.h"
 #include <vector>
 #include <algorithm>
 #include <limits>
 #include <memory>
 #include <string>
 #include <cassert>
+#include <iostream>
 
 namespace splay {
 
@@ -228,64 +231,6 @@ public:
     }
 };
 
-// https://en.wikipedia.org/wiki/Piano_key_frequencies
-// A-4 (440 Hz) is the 49th key on an idealized keyboard
-constexpr int   notes_per_octave = 12;
-
-enum class piano_key : uint8_t {
-    A_0 = 1,
-   
-    A_4 = 49,
-    AS4,
-    B_4,
-    C_4,
-    CS4,
-    D_4,
-    DS4,
-    E_4,
-    F_4,
-    FS4,
-    G_4,
-    GS4,
-
-    C_8 = 88,
-};
-constexpr piano_key operator+(piano_key lhs, int rhs) {
-    return static_cast<piano_key>(static_cast<int>(lhs) + rhs);
-}
-constexpr piano_key operator+(int lhs, piano_key rhs) {
-    return rhs + lhs;
-}
-static_assert(piano_key::GS4 == piano_key::A_4 + 11, "");
-
-float note_difference_to_scale(int note_diff)
-{
-    // To go up a semi-tone multiply the frequency by pow(2,1./12) ~1.06
-    return pow(2.0f, static_cast<float>(note_diff) / notes_per_octave);
-}
-
-constexpr bool piano_key_valid(piano_key n)
-{
-    return n >= piano_key::A_0 && n <= piano_key::C_8;
-}
-
-float piano_key_to_freq(piano_key n)
-{
-    assert(piano_key_valid(n));
-    constexpr float A4_frequency = 440.0f;
-    return A4_frequency * note_difference_to_scale(static_cast<int>(n) - static_cast<int>(piano_key::A_4));
-}
-
-std::string piano_key_to_string(piano_key n)
-{
-    assert(piano_key_valid(n));
-    const int val    = static_cast<int>(n);
-    const int octave = (val-1)/12;
-    const int note   = (val-1)%12;
-    static const char* const note_names[12] ={"A-", "A#", "B-", "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#"};
-    return note_names[note] + std::to_string(octave);
-}
-
 class test_note_player {
 public:
     explicit test_note_player(signal_envelope& envelope, signal_sink freq_out) : envelope_(envelope), freq_out_(freq_out) {
@@ -307,7 +252,7 @@ public:
                 const piano_key song[song_len] ={ tonic, tonic+2, tonic+3, tonic+5, tonic+7, tonic+8, tonic+10, tonic+12};
                 auto key = song[(tick_/2) % song_len];
                 auto freq = piano_key_to_freq(key);
-                printf("%s -- %s %f\n", piano_key_to_string(tonic).c_str(), piano_key_to_string(key).c_str(), freq);
+                std::cout << piano_key_to_string(tonic) <<  " " << piano_key_to_string(key) << " " << freq << std::endl;
                 freq_out_(freq);
                 envelope_.key_on();
             } else {
@@ -338,18 +283,30 @@ auto makesink(X& x, void (X::*func)(Arg))
 }
 
 #include <conio.h>
+#include <fstream>
+
+using namespace splay;
+
 int main()
 {
-    printf("Playing. Press any key to exit\n");
+    try {
+        std::ifstream in("../data/A_natural_minor_scale_ascending_and_descending.mid", std::ifstream::binary);
+        if (!in) throw std::runtime_error("File not found\n");
+        midi::player midi_player{in};
 
-    using namespace splay;
-    sine_generator sine;
-    signal_envelope env;
-    panning_device pan;
+        if (1) throw std::logic_error("Not finished... throwing in " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
 
-    test_note_player p{env, makesink(sine, &sine_generator::freq)};
-    sample_source x = [&] { return pan(env(sine())); };
-    output_dev od{x, [&] { p.tick(); }};
+        sine_generator sine;
+        signal_envelope env;
+        panning_device pan;
 
-    _getch();
+        test_note_player p{env, makesink(sine, &sine_generator::freq)};
+        sample_source x = [&] { return pan(env(sine())); };
+        output_dev od{x, [&] { p.tick(); }};
+
+        std::cout << "Playing. Press any key to exit\n";
+        _getch();
+    } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
+    }
 }
