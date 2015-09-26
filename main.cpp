@@ -60,7 +60,7 @@ using tick_sink     = std::function<void(void)>;
 
 class output_dev {
 public:
-    explicit output_dev(const sample_source& main_generator, const tick_sink& tick_listener) : main_generator_(main_generator), tick_listener_(tick_listener), wavedev_(samplerate, [this](short* d, size_t s) { do_mix(d, static_cast<int>(s/2)); }) {
+    explicit output_dev(const sample_source& main_generator, const tick_sink& tick_listener = nullptr) : main_generator_(main_generator), tick_listener_(tick_listener), wavedev_(samplerate, [this](short* d, size_t s) { do_mix(d, static_cast<int>(s/2)); }) {
     }
     output_dev(const output_dev&) = delete;
     output_dev& operator=(const output_dev&) = delete;
@@ -79,7 +79,7 @@ private:
 
     void do_mix(short* d, int num_stereo_samples) {
         for (int i = 0; i < num_stereo_samples; ++i) {
-            tick_listener_();
+            if (tick_listener_) tick_listener_();
             auto s = main_generator_();
             d[2 * i + 0] = float_to_short(s.l * 32767.0f);
             d[2 * i + 1] = float_to_short(s.r * 32767.0f);
@@ -128,10 +128,14 @@ public:
     }
 
     void key_off() {
-        if (state != state_off) {
+        if (!is_off()) {
             state = state_release;
             set_multiplier(sustain_level, min_level, release_time);
         }
+    }
+
+    bool is_off() const {
+        return state == state_off;
     }
 
     float operator()(float in) {
@@ -198,11 +202,11 @@ private:
 
     // Parameters
     float peak_level    = 1.0f;
-    float sustain_level = 0.4f;
+    float sustain_level = 0.6f;
 
-    float attack_time   = 0.02f;
-    float decay_time    = 0.02f;
-    float release_time  = 0.05f;
+    float attack_time   = 0.04f;
+    float decay_time    = 0.1f;
+    float release_time  = 0.4f;
 
     // http://www.martin-finke.de/blog/articles/audio-plugins-011-envelopes/
     float calc_multiplier(float start_level, float end_level, float length) {
@@ -273,6 +277,116 @@ private:
     float            time_to_next_tick_ = 0.0f;
 };
 
+float curtime = 0.0f;
+
+class simple_midi_channel : public midi::channel {
+public:
+    simple_midi_channel() {
+        for (auto& n : note_) n = piano_key::OFF;
+    }
+
+    int index = 0;
+
+    virtual void note_off(piano_key key, uint8_t) override {
+        std::cout << curtime << " " << index << " Channel off " << piano_key_to_string(key);
+        
+        const auto ch = find_key(key);
+        if (ch >= 0) {
+            envelope_[ch].key_off();
+            std::cout << " - switched off channel " << ch;
+        }
+        
+        std::cout << std::endl;
+    }
+
+    virtual void note_on(piano_key key, uint8_t) override {
+        const auto freq = piano_key_to_freq(key);
+        std::cout << curtime << " " << index << " Channel on " << piano_key_to_string(key) << " " << freq << " Hz";
+
+        // Find channel
+        auto ch = find_key(key);
+        if (ch < 0) { // If the key wasn't already being played
+            auto it = std::find_if(std::begin(envelope_), std::end(envelope_), [](const signal_envelope& e) { return e.is_off(); });
+            if (it != std::end(envelope_)) {
+                ch = static_cast<int>(it - std::begin(envelope_));
+            } else { // And we can't find an empty channel
+                // Use the channel that's been playing the longest
+                ch = static_cast<int>(std::max_element(std::begin(samples_played_), std::end(samples_played_)) - std::begin(samples_played_));
+            }
+        }
+        assert(ch < max_polyphony);
+        std::cout << " - allocated channel " << ch;
+        note_[ch] = key;
+        samples_played_[ch] = 0;
+        sine_[ch].freq(freq);
+        envelope_[ch].key_on();
+        std::cout << std::endl;
+    }
+
+    virtual void controller_change(uint8_t controller, uint8_t value) override {
+        std::cout << curtime << " " << index << " Controller " << int(controller) << " value " << int(value) << std::endl;
+    }
+
+    float operator()() {
+        float out = 0.0f;
+        int active = 0;
+        for (int i = 0; i < max_polyphony; ++i) {
+            if (!envelope_[i].is_off()) {
+                out += envelope_[i](sine_[i]());
+                samples_played_[i]++;
+                ++active;
+            }
+        }
+        if (!active) {
+            return 0.0f;
+        }
+        return out / active;
+    }
+
+private:
+    static constexpr int max_polyphony = 32;
+    signal_envelope envelope_[max_polyphony];
+    sine_generator  sine_[max_polyphony];
+    piano_key       note_[max_polyphony];
+    int             samples_played_[max_polyphony];
+
+    int find_key(piano_key key) {
+        for (int ch = 0; ch < max_polyphony; ++ch) {
+            if (note_[ch] == key) {
+                return ch;
+            }
+        }
+        return -1;
+    }
+};
+
+class midi_player_0 {
+public:
+    explicit midi_player_0(std::istream& in) : p_(in) {
+        for (int i = 0; i < midi::max_channels; ++i) {
+            channels_[i].index = i;
+            p_.set_channel(i, channels_[i]);
+        }
+    }
+
+    stereo_sample operator()() {
+         p_.advance_time(1.0f / samplerate);
+
+        float s = 0.0f;
+        for (auto& ch : channels_) {
+            s += ch();
+        }
+        s *= 1.0f / 16.0f;
+        curtime += 1.0f / samplerate;
+
+        return { s, s };
+    }
+
+private:
+    midi::player        p_;
+    simple_midi_channel channels_[midi::max_channels];
+};
+
 } // namespace splay
 
 
@@ -290,19 +404,20 @@ using namespace splay;
 int main()
 {
     try {
-        std::ifstream in("../data/A_natural_minor_scale_ascending_and_descending.mid", std::ifstream::binary);
-        if (!in) throw std::runtime_error("File not found\n");
-        midi::player midi_player{in};
+        const std::string filename = "../data/onestop.mid";
+        //const std::string filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
+        //const std::string filename = "../data/Characteristic_rock_drum_pattern.mid";
+        std::ifstream in(filename, std::ifstream::binary);
+        if (!in) throw std::runtime_error("File not found: " + filename);
+        midi_player_0 p{in};
 
-        if (1) throw std::logic_error("Not finished... throwing in " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
 
-        sine_generator sine;
-        signal_envelope env;
-        panning_device pan;
-
-        test_note_player p{env, makesink(sine, &sine_generator::freq)};
-        sample_source x = [&] { return pan(env(sine())); };
-        output_dev od{x, [&] { p.tick(); }};
+        //sine_generator sine;
+        //signal_envelope env;
+        //panning_device pan;
+        //test_note_player p{env, makesink(sine, &sine_generator::freq)};
+        //sample_source x = [&] { return pan(env(sine())); };
+        output_dev od{[&]{ return p(); }};
 
         std::cout << "Playing. Press any key to exit\n";
         _getch();

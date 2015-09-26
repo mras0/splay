@@ -10,6 +10,7 @@ namespace splay {
 constexpr int notes_per_octave = 12;
 
 enum class piano_key : unsigned char {
+    OFF = 0,
     A_0 = 1,
 
     A_4 = 49,
