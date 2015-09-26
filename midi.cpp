@@ -300,7 +300,7 @@ void player::impl::tick()
                 case 0x0B: // Controller change
                     assert(e.data_size == 2);
                     if (e.data[0] < 120) {
-                        channel.controller_change(e.data[0], e.data[1]);
+                        channel.controller_change(static_cast<controller_type>(e.data[0]), e.data[1]);
                     } else if (e.data[0] == 120) {
                         std::cout << "All sound off " << (int)e.data[1] << std::endl;
                     } else if (e.data[0] == 121) {
@@ -319,8 +319,11 @@ void player::impl::tick()
                     assert(false);
                     break;
                 case 0xE: // Pitch bend
-                    assert(e.data_size == 2);
-                    channel.pitch_bend((e.data[0] << 7) | e.data[1]);
+                    {
+                        assert(e.data_size == 2);
+                        constexpr int center = 0x2000;
+                        channel.pitch_bend(((e.data[0] << 7) | e.data[1]) - center);
+                    }
                     break;
                 default:
                     std::cout << "Ignoring event " << event_type << std::endl;

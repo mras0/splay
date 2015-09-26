@@ -19,40 +19,6 @@ struct stereo_sample {
     float r;
 };
 
-/*
-enum class event_type {
-    note_off, note_on
-};
-
-struct controller_event {
-    event_type type;
-    uint8_t arg1, arg2;
-};
-
-class controller_event_consumer {
-public:
-    void consume(const controller_event& e) {
-        switch (e.type) {
-        case event_type::note_off:
-            assert(e.arg1 >= 1 && e.arg1 <= 127);
-            assert(e.arg2 >= 1 && e.arg2 <= 127);
-            on_note_off(e.arg1, e.arg2);
-            break;
-        case event_type::note_on:
-            assert(e.arg1 >= 1 && e.arg1 <= 127);
-            assert(e.arg2 >= 1 && e.arg2 <= 127);
-            on_note_on(e.arg1, e.arg2);
-            break;
-        default:
-            assert(false);
-        }
-    }
-private:
-    virtual void on_note_off(uint8_t note, uint8_t velocity) {(void)note;(void)velocity;}
-    virtual void on_note_on(uint8_t note, uint8_t velocity) {(void)note;(void)velocity;}
-};
-*/
-
 using signal_source = std::function<float(void)>;
 using signal_sink   = std::function<void(float)>;
 using sample_source = std::function<stereo_sample(void)>;
@@ -93,7 +59,7 @@ public:
     sine_generator(const sine_generator&) = delete;
     sine_generator& operator=(const sine_generator&) = delete;
 
-    void freq(float f) { freq_ = f; }
+    void freq(float f) { freq_ = f; ang_ = 0.0f; }
 
     float operator()() {
         const auto val = cos(ang_);
@@ -201,12 +167,12 @@ private:
     float multiplier    = 0.0f;
 
     // Parameters
-    float peak_level    = 1.0f;
-    float sustain_level = 0.01f;
+    float peak_level    = 0.9f;
+    float sustain_level = 0.5f;
 
-    float attack_time   = 0.04f;
-    float decay_time    = 0.3f;
-    float release_time  = 0.01f;
+    float attack_time   = 0.1f;
+    float decay_time    = 0.1f;
+    float release_time  = 0.5f;
 
     // http://www.martin-finke.de/blog/articles/audio-plugins-011-envelopes/
     float calc_multiplier(float start_level, float end_level, float length) {
@@ -218,7 +184,7 @@ private:
         assert(start_level > 0.0f);
         assert(end_level > 0.0f);
         assert(length > 0.0f);
-        if (level < min_level) level = min_level;
+        assert(level >= min_level); //if (level < min_level) level = min_level;
         multiplier = calc_multiplier(start_level, end_level, length);
     }
 };
@@ -229,10 +195,17 @@ public:
     panning_device(const panning_device&) = delete;
     panning_device& operator=(const panning_device&) = delete;
 
+    void pan(float p) {
+        assert(p >= 0.0f && p <= 1.0f);
+        pan_ = p;
+    }
+
     stereo_sample operator()(float in) {
         // For actual panning see: Default Pan Formula http://www.midi.org/techspecs/rp36.php
-        return { in, in };
+        return { in * (1.0f - pan_), in * pan_};
     }
+private:
+    float pan_ = 0.5f;
 };
 
 class test_note_player {
@@ -277,88 +250,140 @@ private:
     float            time_to_next_tick_ = 0.0f;
 };
 
-float curtime = 0.0f;
-
 class simple_midi_channel : public midi::channel {
 public:
     simple_midi_channel() {
-        for (auto& n : note_) n = piano_key::OFF;
     }
 
-    int index = 0;
+    int index = -1;
 
     virtual void note_off(piano_key key, uint8_t) override {
-        const auto ch = find_key(key);
-        if (ch >= 0) {
-            envelope_[ch].key_off();
+        if (const auto v = find_key(key)) {
+            v->key_off();
+        } else {
+            assert(false);
         }
     }
 
-    virtual void note_on(piano_key key, uint8_t) override {
-        // Find channel
-        auto ch = find_key(key);
-        if (ch < 0) { // If the key wasn't already being played
-            auto it = std::find_if(std::begin(envelope_), std::end(envelope_), [](const signal_envelope& e) { return e.is_off(); });
-            if (it != std::end(envelope_)) {
-                ch = static_cast<int>(it - std::begin(envelope_));
+    virtual void note_on(piano_key key, uint8_t vel) override {
+        if (vel == 0) {
+            note_off(key, 0);
+            return;
+        }
+
+        std::cout << piano_key_to_string(key) << " " << int(vel) << std::endl;
+
+        // Find voice
+        auto v = find_key(key);
+        if (!v) { // If the key wasn't already being played
+            auto it = std::find_if(std::begin(voices), std::end(voices), [](const voice& v) { return !v.active(); });
+            if (it != std::end(voices)) {
+                v = it;
             } else { // And we can't find an empty channel
                 // Use the channel that's been playing the longest
-                ch = static_cast<int>(std::max_element(std::begin(samples_played_), std::end(samples_played_)) - std::begin(samples_played_));
+                std::cout << "Harvesting!\n";
+                v = std::max_element(std::begin(voices), std::end(voices), &voice::compare_samples_played);
             }
         }
-        assert(ch < max_polyphony);
-        const auto freq = piano_key_to_freq(key);
-        note_[ch] = key;
-        samples_played_[ch] = 0;
-        sine_[ch].freq(freq);
-        envelope_[ch].key_on();
+        v->key_on(key, vel);
     }
 
     virtual void polyphonic_key_pressure(piano_key key, uint8_t pressure) {
+        std::cout << "polyphonic_key_pressure " << piano_key_to_string(key) << " " << (int)pressure << std::endl;
         (void)key;(void)pressure;      
     }
-    virtual void controller_change(uint8_t controller, uint8_t value) override {
-        (void)controller; (void) value; 
-        //std::cout << curtime << " " << index << " Controller " << int(controller) << " value " << int(value) << std::endl;
+    virtual void controller_change(midi::controller_type controller, uint8_t value) override {
+        switch (controller) {
+        case midi::controller_type::volume:
+            volume_ = value / 127.0f;
+            break;
+        case midi::controller_type::pan:
+            pan_.pan(value / 127.0f);
+            break;
+        case midi::controller_type::modulation_wheel:
+        case midi::controller_type::damper_pedal:
+        case midi::controller_type::effects1:
+            break;
+        default:
+            int c = static_cast<int>(controller);
+            if (c != 0 && c != 0x20) {
+                std::cout << "Ignoring controller 0x" << std::hex << int(controller) << std::dec << " value " << int(value) << std::endl;
+                assert(false);
+            }
+        }
     }
     virtual void program_change(uint8_t program) override {
         (void) program;
+        std::cout << "program_change" << int(program) << std::endl;
     }
 
-    virtual void pitch_bend(uint16_t value) override {
+    virtual void pitch_bend(int value) override {
         (void )value;
     }
 
-    float operator()() {
+    stereo_sample operator()() {
         float out = 0.0f;
         int active = 0;
-        for (int i = 0; i < max_polyphony; ++i) {
-            if (!envelope_[i].is_off()) {
-                out += envelope_[i](sine_[i]());
-                samples_played_[i]++;
+        for (auto& v : voices) {
+            if (v.active()) {
                 ++active;
+                out += v();
             }
         }
         if (!active) {
-            return 0.0f;
+            return { 0.0f, 0.0f };
         }
-        return out / active;
+        return pan_(out * volume_ / active);
     }
 
 private:
     static constexpr int max_polyphony = 8;
-    signal_envelope envelope_[max_polyphony];
-    sine_generator  sine_[max_polyphony];
-    piano_key       note_[max_polyphony];
-    int             samples_played_[max_polyphony];
+    float                volume_ = 1.0f;
+    panning_device       pan_;
 
-    int find_key(piano_key key) {
-        for (int ch = 0; ch < max_polyphony; ++ch) {
-            if (note_[ch] == key) {
-                return ch;
-            }
+    struct voice {
+        void key_on(piano_key key, uint8_t vel) {
+            assert(key != piano_key::OFF);
+            assert(vel);
+            const auto freq = piano_key_to_freq(key);
+            key_ = key;
+            vel_ = vel;
+            samples_played_ = 0;
+            sine_.freq(freq);
+            envelope_.key_on();
         }
-        return -1;
+
+        void key_off() {
+            envelope_.key_off();
+        }
+
+        piano_key key() const {
+            return key_;
+        }
+
+        bool active() const {
+            return !envelope_.is_off();
+        }
+
+        float operator()() {
+            ++samples_played_;
+            return envelope_(sine_());
+        }
+
+        static bool compare_samples_played(const voice& l, const voice& r) {
+            return l.samples_played_ < r.samples_played_;
+        }
+    private:
+        signal_envelope envelope_;
+        sine_generator  sine_;
+        piano_key       key_;
+        uint8_t         vel_;
+        int             samples_played_;
+    } voices[max_polyphony];
+
+    voice* find_key(piano_key key) {
+        auto it = std::find_if(std::begin(voices), std::end(voices), [key](const voice& v) { return v.key() == key; });
+        return it == std::end(voices) ? nullptr : it;
     }
 };
 
@@ -372,16 +397,19 @@ public:
     }
 
     stereo_sample operator()() {
-         p_.advance_time(1.0f / samplerate);
+        p_.advance_time(1.0f / samplerate);
 
-        float s = 0.0f;
+        stereo_sample s{0.0f, 0.0f};
         for (auto& ch : channels_) {
-            s += ch();
+            const auto ch_sample = ch();
+            s.l += ch_sample.l;
+            s.r += ch_sample.r;
         }
-        s *= 1.0f / 16.0f;
-        curtime += 1.0f / samplerate;
+        constexpr float scale = 1.0f / 8.0f;
+        s.l *= scale;
+        s.r *= scale;
 
-        return { s, s };
+        return s;
     }
 
 private:
@@ -406,8 +434,8 @@ using namespace splay;
 int main()
 {
     try {
-        const std::string filename = "../data/onestop.mid";
-        //const std::string filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
+        //const std::string filename = "../data/onestop.mid";
+        const std::string filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
         //const std::string filename = "../data/Characteristic_rock_drum_pattern.mid";
         std::ifstream in(filename, std::ifstream::binary);
         if (!in) throw std::runtime_error("File not found: " + filename);
