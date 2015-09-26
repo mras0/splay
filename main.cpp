@@ -202,11 +202,11 @@ private:
 
     // Parameters
     float peak_level    = 1.0f;
-    float sustain_level = 0.6f;
+    float sustain_level = 0.01f;
 
     float attack_time   = 0.04f;
-    float decay_time    = 0.1f;
-    float release_time  = 0.4f;
+    float decay_time    = 0.3f;
+    float release_time  = 0.01f;
 
     // http://www.martin-finke.de/blog/articles/audio-plugins-011-envelopes/
     float calc_multiplier(float start_level, float end_level, float length) {
@@ -288,21 +288,13 @@ public:
     int index = 0;
 
     virtual void note_off(piano_key key, uint8_t) override {
-        std::cout << curtime << " " << index << " Channel off " << piano_key_to_string(key);
-        
         const auto ch = find_key(key);
         if (ch >= 0) {
             envelope_[ch].key_off();
-            std::cout << " - switched off channel " << ch;
         }
-        
-        std::cout << std::endl;
     }
 
     virtual void note_on(piano_key key, uint8_t) override {
-        const auto freq = piano_key_to_freq(key);
-        std::cout << curtime << " " << index << " Channel on " << piano_key_to_string(key) << " " << freq << " Hz";
-
         // Find channel
         auto ch = find_key(key);
         if (ch < 0) { // If the key wasn't already being played
@@ -315,16 +307,26 @@ public:
             }
         }
         assert(ch < max_polyphony);
-        std::cout << " - allocated channel " << ch;
+        const auto freq = piano_key_to_freq(key);
         note_[ch] = key;
         samples_played_[ch] = 0;
         sine_[ch].freq(freq);
         envelope_[ch].key_on();
-        std::cout << std::endl;
     }
 
+    virtual void polyphonic_key_pressure(piano_key key, uint8_t pressure) {
+        (void)key;(void)pressure;      
+    }
     virtual void controller_change(uint8_t controller, uint8_t value) override {
-        std::cout << curtime << " " << index << " Controller " << int(controller) << " value " << int(value) << std::endl;
+        (void)controller; (void) value; 
+        //std::cout << curtime << " " << index << " Controller " << int(controller) << " value " << int(value) << std::endl;
+    }
+    virtual void program_change(uint8_t program) override {
+        (void) program;
+    }
+
+    virtual void pitch_bend(uint16_t value) override {
+        (void )value;
     }
 
     float operator()() {
@@ -344,7 +346,7 @@ public:
     }
 
 private:
-    static constexpr int max_polyphony = 32;
+    static constexpr int max_polyphony = 8;
     signal_envelope envelope_[max_polyphony];
     sine_generator  sine_[max_polyphony];
     piano_key       note_[max_polyphony];

@@ -285,15 +285,19 @@ void player::impl::tick()
 
                 assert(event_type >= 8 && event_type <= 14);
                 switch (event_type) {
-                case 0x08:
+                case 0x08: // Note off
                     assert(e.data_size == 2);
                     channel.note_off(convert_note(e.data[0]), e.data[1]);
                     break;
-                case 0x09:
+                case 0x09: // Note on
                     assert(e.data_size == 2);
                     channel.note_on(convert_note(e.data[0]), e.data[1]);
                     break;
-                case 0x0B:
+                case 0x0A: // Key after-touch
+                    assert(e.data_size == 2);
+                    channel.polyphonic_key_pressure(convert_note(e.data[0]), e.data[1]);
+                    break;
+                case 0x0B: // Controller change
                     assert(e.data_size == 2);
                     if (e.data[0] < 120) {
                         channel.controller_change(e.data[0], e.data[1]);
@@ -306,8 +310,21 @@ void player::impl::tick()
                         assert(false);
                     }
                     break;
+                case 0xC: // Program (patch) change
+                    assert(e.data_size == 1);
+                    channel.program_change(e.data[0]);
+                    break;
+                case 0xD: // Channel pressure (after-touch)
+                    assert(e.data_size == 1);
+                    assert(false);
+                    break;
+                case 0xE: // Pitch bend
+                    assert(e.data_size == 2);
+                    channel.pitch_bend((e.data[0] << 7) | e.data[1]);
+                    break;
                 default:
                     std::cout << "Ignoring event " << event_type << std::endl;
+                    assert(false);
                 }
                 continue;
             }
