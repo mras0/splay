@@ -294,15 +294,9 @@ public:
     simple_midi_channel(const simple_midi_channel&) = delete;
     simple_midi_channel& operator=(const simple_midi_channel&) = delete;
 
-    int index = -1;
-
     virtual void note_off(piano_key key, uint8_t) override {        
         if (const auto v = find_key(key)) {
-            //std::cout << curtime << std::endl;
-            //std::cout << index << " " << (v-std::begin(voices)) << " " << piano_key_to_string(key) << " OFF" << std::endl;
             v->key_off();
-        } else {
-            assert(max_polyphony == 1);
         }
     }
 
@@ -324,15 +318,13 @@ public:
                 v = std::max_element(std::begin(voices), std::end(voices), &voice::compare_samples_played);
             }
         }
-        //std::cout << curtime << std::endl;
-        //std::cout << index << " " << (v-std::begin(voices)) << " " << piano_key_to_string(key) << " " << int(vel) << std::endl;
         v->key_on(key, vel);
     }
 
     virtual void polyphonic_key_pressure(piano_key key, uint8_t pressure) {
         std::cout << "polyphonic_key_pressure " << piano_key_to_string(key) << " " << (int)pressure << std::endl;
-        (void)key;(void)pressure;      
     }
+
     virtual void controller_change(midi::controller_type controller, uint8_t value) override {
         switch (controller) {
         case midi::controller_type::volume:
@@ -343,23 +335,28 @@ public:
             break;
         case midi::controller_type::modulation_wheel:
         case midi::controller_type::damper_pedal:
+        case midi::controller_type::sound_controller5:
         case midi::controller_type::effects1:
+        case midi::controller_type::effects2:
+        case midi::controller_type::effects3:
+        case midi::controller_type::effects4:
+        case midi::controller_type::effects5:
             break;
         default:
             int c = static_cast<int>(controller);
-            if (c != 0 && c != 0x20) {
+            const bool ignore = (c == 0) || (c >= 0x20 && c <= 0x3F) || (c >= 0x60 && c <= 0x77);
+            if (!ignore) {
                 std::cout << "Ignoring controller 0x" << std::hex << int(controller) << std::dec << " value " << int(value) << std::endl;
                 assert(false);
             }
         }
     }
     virtual void program_change(uint8_t program) override {
-        (void) program;
-        std::cout << "program_change" << int(program) << std::endl;
+        std::cout << "program_change " << int(program) << std::endl;
     }
 
     virtual void pitch_bend(int value) override {
-        (void )value;
+        std::cout << "pitch_bend " << value << std::endl;
     }
 
     stereo_sample operator()() {
@@ -433,7 +430,6 @@ class midi_player_0 {
 public:
     explicit midi_player_0(std::istream& in) : p_(in) {
         for (int i = 0; i < midi::max_channels; ++i) {
-            channels_[i].index = i;
             p_.set_channel(i, channels_[i]);
         }
     }
@@ -491,7 +487,8 @@ int main(int argc, const char* argv[])
         //filename = "../data/Characteristic_rock_drum_pattern.mid";
         //filename = "../data/beethoven_ode_to_joy.mid";
         //filename = "../data/Beethoven_Ludwig_van_-_Beethoven_Symphony_No._5_4th.mid";
-        filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
+        //filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
+        filename = "../data/Blue_Oyster_Cult_-_Don't_Fear_the_Reaper.mid";
         if (argc >= 2) filename = argv[1];
         std::ifstream in(filename, std::ifstream::binary);
         if (!in) throw std::runtime_error("File not found: " + filename);

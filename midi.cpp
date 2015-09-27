@@ -176,8 +176,9 @@ track read_track(std::istream& in)
                 }
                 t.events.push_back(e);
             } else {
-                std::cout << "Unsupported system event 0x" << std::hex << std::setw(2) << std::setfill('0') << command_byte << std::dec << std::setfill(' ') << std::endl;
-                assert(false);
+                const auto len = read_var_num(in);
+                std::cout << "Skipping system event 0x" << std::hex << std::setw(2) << std::setfill('0') << command_byte << std::dec << std::setfill(' ') << " lemgth " << len << std::endl;
+                in.seekg(len, std::ios::cur);
             }
         } else {
             // Channel message
@@ -327,7 +328,8 @@ void player::impl::tick()
                     {
                         assert(e.data_size == 2);
                         constexpr int center = 0x2000;
-                        channel.pitch_bend(((e.data[0] << 7) | e.data[1]) - center);
+                        const int val = (e.data[0] << 7) | e.data[1];
+                        channel.pitch_bend(val < center ? val : center - val);
                     }
                     break;
                 default:
@@ -363,6 +365,11 @@ void player::impl::tick()
                     us_per_quater_note_ = (e.data[0]<<16) | (e.data[1]<<8) | e.data[2];
                     std::cout << "Set tempo " << us_per_quater_note_ << " us/midi-quater-note" << std::endl;
                 }
+                break;
+            case 0x54: // FF 54 05 hr mn se fr ff SMPTE Offset
+                assert(e.data_size == 5);
+                std::cout << "Ignoring SMPTE Offset " << e << std::endl;
+                break;
                 break;
             case 0x58: // FF 58 04 nn dd cc bb Time Signature
                 {

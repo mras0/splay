@@ -12,11 +12,16 @@ constexpr int max_channels = 16;
 
 // http://www.midi.org/techspecs/midimessages.php
 enum class controller_type : uint8_t {
-    modulation_wheel = 0x01, // Modulation Wheel or Lever
-    volume           = 0x07, // Volume
-    pan              = 0x0A, // Pan
-    damper_pedal     = 0x40, // Damper pedal on/off, <=63 off >=64 on
-    effects1         = 0x5B, // Effects 1, Depth (default: Reverb Send Level - see MMA RP-023)
+    modulation_wheel   = 0x01, // Modulation Wheel or Lever
+    volume             = 0x07, // Volume
+    pan                = 0x0A, // Pan
+    damper_pedal       = 0x40, // Damper pedal on/off, <=63 off >=64 on
+    sound_controller5  = 0x4A, // Sound Controller 5 (default: Brightness) 
+    effects1           = 0x5B, // Effects 1 Depth (default: Reverb Send Level - see MMA RP-023)
+    effects2           = 0x5C, // Effects 2 Depth 
+    effects3           = 0x5D, // Effects 3 Depth
+    effects4           = 0x5E, // Effects 4 Depth
+    effects5           = 0x5F, // Effects 5 Depth
 
 };
 
