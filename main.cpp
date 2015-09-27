@@ -22,19 +22,20 @@ struct stereo_sample {
 using signal_source = std::function<float(void)>;
 using signal_sink   = std::function<void(float)>;
 using sample_source = std::function<stereo_sample(void)>;
-using tick_sink     = std::function<void(void)>;
 
 class output_dev {
 public:
-    explicit output_dev(const sample_source& main_generator, const tick_sink& tick_listener = nullptr) : main_generator_(main_generator), tick_listener_(tick_listener), wavedev_(samplerate, [this](short* d, size_t s) { do_mix(d, static_cast<int>(s/2)); }) {
+    using on_out_callback = std::function<void(std::vector<short>)>;
+
+    explicit output_dev(const sample_source& main_generator, const on_out_callback& on_out_callback = nullptr) : main_generator_(main_generator), on_out_callback_(on_out_callback), wavedev_(samplerate, [this](short* d, size_t s) { do_mix(d, static_cast<int>(s/2)); }) {
     }
     output_dev(const output_dev&) = delete;
     output_dev& operator=(const output_dev&) = delete;
 
 private:
-    sample_source main_generator_;
-    tick_sink     tick_listener_;
-    wavedev       wavedev_;
+    sample_source   main_generator_;
+    on_out_callback on_out_callback_;
+    wavedev         wavedev_;
 
     static short float_to_short(float f) {
         int i = static_cast<int>(f);
@@ -45,11 +46,11 @@ private:
 
     void do_mix(short* d, int num_stereo_samples) {
         for (int i = 0; i < num_stereo_samples; ++i) {
-            if (tick_listener_) tick_listener_();
             auto s = main_generator_();
             d[2 * i + 0] = float_to_short(s.l * 32767.0f);
             d[2 * i + 1] = float_to_short(s.r * 32767.0f);
         }
+        if (on_out_callback_) on_out_callback_(std::vector<short>(d, d+num_stereo_samples));
     }
 };
 
@@ -59,6 +60,7 @@ public:
     sine_generator(const sine_generator&) = delete;
     sine_generator& operator=(const sine_generator&) = delete;
 
+    void ang(float a) { ang_ = a; }
     void freq(float f) { freq_ = f; }
 
     float operator()() {
@@ -352,11 +354,12 @@ public:
         }
     }
     virtual void program_change(uint8_t program) override {
-        std::cout << "program_change " << int(program) << std::endl;
+        (void)program;
+        //std::cout << "program_change " << int(program) << std::endl;
     }
 
     virtual void pitch_bend(int value) override {
-        std::cout << "pitch_bend " << value << std::endl;
+        (void)value;//std::cout << "pitch_bend " << value << std::endl;
     }
 
     stereo_sample operator()() {
@@ -403,7 +406,9 @@ private:
             }
 
             sine_.freq(freq_());
-            return envelope_(sine_());
+            const auto out = envelope_(sine_());
+            if (envelope_.is_off()) sine_.ang(0.0f);
+            return out;
         }
 
         static bool compare_samples_played(const voice& l, const voice& r) {
@@ -416,8 +421,8 @@ private:
         sine_generator   sine_;
         piano_key        key_ = piano_key::OFF;
         exp_ramped_value freq_{0.000001f, 0.001f, 200000.0f, 0.2f};
-        uint8_t         vel_ = 0;
-        int             samples_played_ = 0;
+        uint8_t          vel_ = 0;
+        int              samples_played_ = 0;
     } voices[max_polyphony];
 
     voice* find_key(piano_key key) {
@@ -444,7 +449,7 @@ public:
             s.l += ch_sample.l;
             s.r += ch_sample.r;
         }
-        constexpr float boost = 26.0f; // Watch for loud (see below)
+        constexpr float boost = 100.0f; // Watch for loud (see below)
         constexpr float scale = boost * 1.0f / midi::max_channels;
         s.l *= scale;
         s.r *= scale;
@@ -475,6 +480,11 @@ auto makesink(X& x, void (X::*func)(Arg))
 
 #include <conio.h>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <mutex>
+#include "gui.h"
+#include "vis.h"
 
 using namespace splay;
 
@@ -487,23 +497,51 @@ int main(int argc, const char* argv[])
         //filename = "../data/Characteristic_rock_drum_pattern.mid";
         //filename = "../data/beethoven_ode_to_joy.mid";
         //filename = "../data/Beethoven_Ludwig_van_-_Beethoven_Symphony_No._5_4th.mid";
-        //filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
-        filename = "../data/Blue_Oyster_Cult_-_Don't_Fear_the_Reaper.mid";
+        filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
+        //filename = "../data/Blue_Oyster_Cult_-_Don't_Fear_the_Reaper.mid";
         if (argc >= 2) filename = argv[1];
         std::ifstream in(filename, std::ifstream::binary);
         if (!in) throw std::runtime_error("File not found: " + filename);
         midi_player_0 p{in};
 
+        gui g{1000, 400};
+        std::mutex data_mutex;
+        std::vector<short> data;
+        auto& spec_bitmap = g.make_bitmap_window(0, 0, 400, 300);
+        auto& max_freq_label = g.make_label("", 0, 300, 400, 100);
+        auto& wave_bitmap = g.make_bitmap_window(500, 0, 400, 300);
 
-        //sine_generator sine;
-        //signal_envelope env;
-        //panning_device pan;
-        //test_note_player p{env, makesink(sine, &sine_generator::freq)};
-        //sample_source x = [&] { return pan(env(sine())); };
-        output_dev od{[&]{ return p(); }};
+        auto update = [&]() {
+            std::vector<short> d;
+            {
+                std::lock_guard<std::mutex> lock(data_mutex);
+                d = std::move(data);
+            }
 
-        std::cout << "Playing. Press any key to exit\n";
-        _getch();
+            if (d.empty()) return;
+
+            // Stero -> Mono
+            assert(d.size() % 2 == 0);
+            int s = static_cast<int>(d.size() / 2);
+            for (int i = 0; i < s; ++i) {
+                d[i] = (d[i*2] + d[i*2+1]) / 2;
+            }
+            d.resize(s);
+
+            draw_waveform_data(wave_bitmap, d);
+            double freq_max = draw_spetrum_data(spec_bitmap, d, samplerate);
+            std::ostringstream oss;
+            oss << "Maximum frequency: " << std::setw(5) << int(freq_max+0.5) << " Hz";
+            max_freq_label.text(oss.str());
+        };
+
+        output_dev od{[&]{ return p(); },
+            [&](std::vector<short> new_data) {
+            std::lock_guard<std::mutex> lock(data_mutex);
+            data = std::move(new_data); 
+            g.add_job(update);
+        }};
+        g.main_loop();
     } catch (const std::exception& e) {
         std::cout << e.what() << std::endl;
     }

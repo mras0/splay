@@ -15,7 +15,7 @@ class wavedev::impl {
 public:
     explicit impl(unsigned sample_rate, callback_t callback) 
         : sample_rate_(sample_rate)
-        , buffer_size_(2 * /*4096*/44100)
+        , buffer_size_(2 * 4096)
         , callback_(callback)
         , waveout_(create_waveout())
         , exiting_(false)
