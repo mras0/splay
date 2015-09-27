@@ -190,6 +190,38 @@ private:
     }
 };
 
+class exp_ramped_value {
+public:
+    explicit exp_ramped_value(float min, float value, float max, float slide_length)
+        : value_(value)
+        , down_multiplier_(calc_exp_multiplier(max, min, slide_length))
+        , up_multiplier_(calc_exp_multiplier(min, max, slide_length))
+        , target_(value) {
+    }
+
+    void operator()(float value) {
+        target_ = value;
+        
+    }
+
+    float operator()() {
+        if (target_ == value_) {
+        } else if (target_ < value_) {
+            value_ = std::max(value_ * down_multiplier_, target_);
+        } else {
+            value_ = std::min(value_ * up_multiplier_, target_);
+        }
+        return value_;
+    }
+
+private:
+    float value_;
+    float down_multiplier_;
+    float up_multiplier_;
+    float slide_length_;
+    float target_;
+};
+
 class panning_device {
 public:
     panning_device() = default;
@@ -198,15 +230,16 @@ public:
 
     void pan(float p) {
         assert(p >= 0.0f && p <= 1.0f);
-        pan_ = p;
+        pan_(p);
     }
 
     stereo_sample operator()(float in) {
         // For actual panning see: Default Pan Formula http://www.midi.org/techspecs/rp36.php
-        return { in * (1.0f - pan_), in * pan_};
+        const auto pan = pan_();
+        return { in * (1.0f - pan), in * pan};
     }
 private:
-    float pan_ = 0.5f;
+    exp_ramped_value pan_{0.000001f, 0.5f, 1.0f, 0.01f};
 };
 
 class test_note_player {
@@ -258,6 +291,9 @@ public:
     simple_midi_channel() {
     }
 
+    simple_midi_channel(const simple_midi_channel&) = delete;
+    simple_midi_channel& operator=(const simple_midi_channel&) = delete;
+
     int index = -1;
 
     virtual void note_off(piano_key key, uint8_t) override {        
@@ -266,7 +302,7 @@ public:
             //std::cout << index << " " << (v-std::begin(voices)) << " " << piano_key_to_string(key) << " OFF" << std::endl;
             v->key_off();
         } else {
-            assert(false);
+            assert(max_polyphony == 1);
         }
     }
 
@@ -300,11 +336,9 @@ public:
     virtual void controller_change(midi::controller_type controller, uint8_t value) override {
         switch (controller) {
         case midi::controller_type::volume:
-            // TODO: ramp
-            volume_ = value / 127.0f;
+            volume_(value / 127.0f);
             break;
         case midi::controller_type::pan:
-            // TODO: ramp
             pan_.pan(value / 127.0f);
             break;
         case midi::controller_type::modulation_wheel:
@@ -333,12 +367,12 @@ public:
         for (auto& v : voices) {
             out += v();
         }
-        return pan_(out * volume_ / max_polyphony);
+        return pan_(out * volume_() / max_polyphony);
     }
 
 private:
     static constexpr int max_polyphony = 32;
-    float                volume_ = 1.0f;
+    exp_ramped_value     volume_{0.000001f, 1.0f, 1.0f, 0.2f};
     panning_device       pan_;
 
     struct voice {
@@ -347,9 +381,7 @@ private:
             assert(vel);
             key_ = key;
             vel_ = vel;
-
-            const float slide_length = 0.02f;
-            multiplier_ = piano_key_to_freq(key_) > freq_ ? calc_exp_multiplier(min_freq, 20000, slide_length) : calc_exp_multiplier(20000, min_freq, slide_length);
+            freq_(piano_key_to_freq(key_));
             samples_played_ = 0;
             envelope_.key_on();
         }
@@ -373,13 +405,7 @@ private:
                 return 0.0f;
             }
 
-            const auto target_freq = piano_key_to_freq(key_);
-            if (freq_ < target_freq) {
-                freq_ = multiplier_ > 1.0f ? freq_ * multiplier_ : target_freq;
-            } else if (freq_ > target_freq) {
-                freq_ = multiplier_ < 1.0f ? freq_ * multiplier_ : target_freq;
-            }
-            sine_.freq(freq_);
+            sine_.freq(freq_());
             return envelope_(sine_());
         }
 
@@ -389,11 +415,10 @@ private:
     private:
         static constexpr float min_freq = 0.001f;
 
-        signal_envelope envelope_;
-        sine_generator  sine_;
-        piano_key       key_ = piano_key::OFF;
-        float           freq_ = min_freq;
-        float           multiplier_ = 1.0f;
+        signal_envelope  envelope_;
+        sine_generator   sine_;
+        piano_key        key_ = piano_key::OFF;
+        exp_ramped_value freq_{0.000001f, 0.001f, 200000.0f, 0.2f};
         uint8_t         vel_ = 0;
         int             samples_played_ = 0;
     } voices[max_polyphony];
@@ -461,10 +486,12 @@ int main(int argc, const char* argv[])
 {
     try {
         std::string filename;
-        filename = "../data/onestop.mid";
+        //filename = "../data/onestop.mid";
         //filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
         //filename = "../data/Characteristic_rock_drum_pattern.mid";
         //filename = "../data/beethoven_ode_to_joy.mid";
+        //filename = "../data/Beethoven_Ludwig_van_-_Beethoven_Symphony_No._5_4th.mid";
+        filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
         if (argc >= 2) filename = argv[1];
         std::ifstream in(filename, std::ifstream::binary);
         if (!in) throw std::runtime_error("File not found: " + filename);

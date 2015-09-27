@@ -349,6 +349,10 @@ void player::impl::tick()
             case 0x03: // FF 03 len text Sequence/Track Name
                 std::cout << "Track name (" << track_number << ") " << std::string(e.data, e.data+e.data_size) << std::endl;
                 break;
+            case 0x20: // https://groups.google.com/forum/#!topic/comp.music.midi/_MIjgi-8xQQ
+            case 0x21:
+                assert(e.data_size == 1);
+                break;
             case 0x2F: // FF 2F 00 End of Track
                 assert(e.data_size == 0);
                 std::cout << "End of track " << track_number << std::endl;
