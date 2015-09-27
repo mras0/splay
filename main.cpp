@@ -1,6 +1,8 @@
 #include "wavedev.h"
+#include "constants.h"
 #include "midi.h"
 #include "note.h"
+#include "filter.h"
 #include <vector>
 #include <algorithm>
 #include <limits>
@@ -10,9 +12,6 @@
 #include <iostream>
 
 namespace splay {
-
-constexpr int samplerate = 44100;
-constexpr float pi = 3.1415926535897932385f;
 
 struct stereo_sample {
     float l;
@@ -291,6 +290,8 @@ double curtime = 0.0f;
 class simple_midi_channel : public midi::channel {
 public:
     simple_midi_channel() {
+        filter_.filter(filter_type::lowpass);
+        filter_.cutoff_frequeny(6000.0f);
     }
 
     simple_midi_channel(const simple_midi_channel&) = delete;
@@ -367,6 +368,7 @@ public:
         for (auto& v : voices) {
             out += v();
         }
+        out = filter_.next(out);
         return pan_(out * volume_() / max_polyphony);
     }
 
@@ -374,6 +376,7 @@ private:
     static constexpr int max_polyphony = 32;
     exp_ramped_value     volume_{0.000001f, 1.0f, 1.0f, 0.2f};
     panning_device       pan_;
+    biquad_filter        filter_;
 
     struct voice {
         void key_on(piano_key key, uint8_t vel) {
@@ -495,9 +498,9 @@ int main(int argc, const char* argv[])
         //filename = "../data/onestop.mid";
         //filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
         //filename = "../data/Characteristic_rock_drum_pattern.mid";
-        //filename = "../data/beethoven_ode_to_joy.mid";
+        filename = "../data/beethoven_ode_to_joy.mid";
         //filename = "../data/Beethoven_Ludwig_van_-_Beethoven_Symphony_No._5_4th.mid";
-        filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
+        //filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
         //filename = "../data/Blue_Oyster_Cult_-_Don't_Fear_the_Reaper.mid";
         if (argc >= 2) filename = argv[1];
         std::ifstream in(filename, std::ifstream::binary);
