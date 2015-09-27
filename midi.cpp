@@ -224,6 +224,7 @@ public:
 
 private:
     std::vector<track> tracks_;
+    std::vector<int>   track_pos_;
     int                division_           = 0; // delta divisions / quaternote
     int                current_tick_       = 0;
     int                us_to_next_tick_    = 0;
@@ -262,17 +263,21 @@ player::impl::impl(std::istream& in)
 
     for (uint16_t track_number = 0; track_number < midi_tracks; ++track_number) {
         tracks_.push_back(read_track(in));
+        track_pos_.push_back(0);
     }
 }
 
 void player::impl::tick()
 {
     for (int track_number = 0; track_number < tracks_.size(); ++track_number) {
-
-        for (const auto& e : tracks_[track_number].events) {
-            if (e.time < current_tick_) continue;
-            if (e.time > current_tick_) continue;
+        auto& pos = track_pos_[track_number];
+        auto& track = tracks_[track_number];
+        while (pos < track.events.size()) {
+            auto& e = track.events[pos];
+            if (e.time < current_tick_) assert(false);
+            if (e.time > current_tick_) break;
             assert(e.time == current_tick_);
+            ++pos;
 
             if (e.command < 0x100) {
                 const auto event_type    = e.command >> 4;

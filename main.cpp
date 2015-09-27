@@ -59,7 +59,7 @@ public:
     sine_generator(const sine_generator&) = delete;
     sine_generator& operator=(const sine_generator&) = delete;
 
-    void freq(float f) { freq_ = f; ang_ = 0.0f; }
+    void freq(float f) { freq_ = f; }
 
     float operator()() {
         const auto val = cos(ang_);
@@ -79,6 +79,12 @@ private:
     // Parameters
     float freq_ = 440.0f;
 };
+
+// http://www.martin-finke.de/blog/articles/audio-plugins-011-envelopes/
+float calc_exp_multiplier(float start_level, float end_level, float length) {
+    assert(start_level > 0.0f);
+    return 1.0f + (log(end_level) - log(start_level)) / (length * samplerate);
+}
 
 class signal_envelope {
 public:
@@ -167,25 +173,20 @@ private:
     float multiplier    = 0.0f;
 
     // Parameters
-    float peak_level    = 0.9f;
-    float sustain_level = 0.15f;
+    float peak_level    = 0.6f;
+    float sustain_level = 0.2f;
 
-    float attack_time   = 0.2f;
-    float decay_time    = 0.2f;
-    float release_time  = 0.45f;
+    float attack_time   = 0.1f;
+    float decay_time    = 0.05f;
+    float release_time  = 0.1f;
 
-    // http://www.martin-finke.de/blog/articles/audio-plugins-011-envelopes/
-    float calc_multiplier(float start_level, float end_level, float length) {
-        assert(start_level > 0.0f);
-        return 1.0f + (log(end_level) - log(start_level)) / (length * samplerate);
-    }
 
     void set_multiplier(float start_level, float end_level, float length) {
         assert(start_level > 0.0f);
         assert(end_level > 0.0f);
         assert(length > 0.0f);
         assert(level >= min_level); //if (level < min_level) level = min_level;
-        multiplier = calc_multiplier(start_level, end_level, length);
+        multiplier = calc_exp_multiplier(start_level, end_level, length);
     }
 };
 
@@ -283,7 +284,7 @@ public:
                 v = it;
             } else { // And we can't find an empty channel
                 // Use the channel that's been playing the longest
-                std::cout << "Harvesting!\n";
+                //std::cout << "Harvesting!\n";
                 v = std::max_element(std::begin(voices), std::end(voices), &voice::compare_samples_played);
             }
         }
@@ -299,9 +300,11 @@ public:
     virtual void controller_change(midi::controller_type controller, uint8_t value) override {
         switch (controller) {
         case midi::controller_type::volume:
+            // TODO: ramp
             volume_ = value / 127.0f;
             break;
         case midi::controller_type::pan:
+            // TODO: ramp
             pan_.pan(value / 127.0f);
             break;
         case midi::controller_type::modulation_wheel:
@@ -330,11 +333,11 @@ public:
         for (auto& v : voices) {
             out += v();
         }
-        return pan_(out * volume_ / /*max_polyphony*/2);
+        return pan_(out * volume_ / max_polyphony);
     }
 
 private:
-    static constexpr int max_polyphony = 16;
+    static constexpr int max_polyphony = 32;
     float                volume_ = 1.0f;
     panning_device       pan_;
 
@@ -342,11 +345,12 @@ private:
         void key_on(piano_key key, uint8_t vel) {
             assert(key != piano_key::OFF);
             assert(vel);
-            const auto freq = piano_key_to_freq(key);
             key_ = key;
             vel_ = vel;
+
+            const float slide_length = 0.02f;
+            multiplier_ = piano_key_to_freq(key_) > freq_ ? calc_exp_multiplier(min_freq, 20000, slide_length) : calc_exp_multiplier(20000, min_freq, slide_length);
             samples_played_ = 0;
-            sine_.freq(freq);
             envelope_.key_on();
         }
 
@@ -359,11 +363,23 @@ private:
         }
 
         bool active() const {
-            return !envelope_.is_off();
+            return key_ != piano_key::OFF && !envelope_.is_off();
         }
 
         float operator()() {
             ++samples_played_;
+
+            if (!active()) {
+                return 0.0f;
+            }
+
+            const auto target_freq = piano_key_to_freq(key_);
+            if (freq_ < target_freq) {
+                freq_ = multiplier_ > 1.0f ? freq_ * multiplier_ : target_freq;
+            } else if (freq_ > target_freq) {
+                freq_ = multiplier_ < 1.0f ? freq_ * multiplier_ : target_freq;
+            }
+            sine_.freq(freq_);
             return envelope_(sine_());
         }
 
@@ -371,9 +387,13 @@ private:
             return l.samples_played_ < r.samples_played_;
         }
     private:
+        static constexpr float min_freq = 0.001f;
+
         signal_envelope envelope_;
         sine_generator  sine_;
         piano_key       key_ = piano_key::OFF;
+        float           freq_ = min_freq;
+        float           multiplier_ = 1.0f;
         uint8_t         vel_ = 0;
         int             samples_played_ = 0;
     } voices[max_polyphony];
@@ -403,9 +423,18 @@ public:
             s.l += ch_sample.l;
             s.r += ch_sample.r;
         }
-        constexpr float scale = 1.0f / 8.0f;
+        constexpr float boost = 26.0f; // Watch for loud (see below)
+        constexpr float scale = boost * 1.0f / midi::max_channels;
         s.l *= scale;
         s.r *= scale;
+
+        if (fabs(s.l) > 1.0f || fabs(s.r) > 1.0f) {
+            static bool warn = false;
+            if (!warn) {
+                warn = true;
+                std::cout << "Loud!\n";
+            }
+        }
         return s;
     }
 
@@ -428,12 +457,15 @@ auto makesink(X& x, void (X::*func)(Arg))
 
 using namespace splay;
 
-int main()
+int main(int argc, const char* argv[])
 {
     try {
-        const std::string filename = "../data/onestop.mid";
-        //const std::string filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
-        //const std::string filename = "../data/Characteristic_rock_drum_pattern.mid";
+        std::string filename;
+        filename = "../data/onestop.mid";
+        //filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
+        //filename = "../data/Characteristic_rock_drum_pattern.mid";
+        //filename = "../data/beethoven_ode_to_joy.mid";
+        if (argc >= 2) filename = argv[1];
         std::ifstream in(filename, std::ifstream::binary);
         if (!in) throw std::runtime_error("File not found: " + filename);
         midi_player_0 p{in};
