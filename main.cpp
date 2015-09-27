@@ -53,6 +53,57 @@ private:
     }
 };
 
+
+enum class waveform { sine, square, triangle, sawtooth, waveform_count };
+
+class oscillator {
+public:
+    oscillator() {
+    }
+
+    void waveform(waveform wf) {
+        waveform_ = wf;
+    }
+
+    void freq(float freq) {
+        freq_ = freq;
+    }
+
+    void ang(float a) {
+        t_ = a;
+    }
+
+    float operator()() {
+        float val = 0;
+
+        switch (waveform_) {
+        case waveform::sine:
+            val = cos(2.0f * pi * t_);
+            break;
+        case waveform::square:
+            val = cos(2.0f * pi * t_);
+            val = val < 0 ? -1.0f : 1.0f;
+            break;
+        case waveform::triangle:
+            val = 2 * abs(2*(t_ - floor(t_+0.5f))) - 1;
+            break;
+        case waveform::sawtooth:
+            val = 2 * (t_ - floor(t_ + 0.5f));
+            break;
+        default:
+            assert(false);
+        }
+        t_ += freq_ / samplerate;
+        return val;
+    }
+
+private:
+    enum class waveform waveform_ = waveform::sawtooth;
+    float freq_        = 0.0f;
+    float t_           = 0.0f;
+};
+
+
 class sine_generator {
 public:
     sine_generator() = default;
@@ -174,12 +225,12 @@ private:
     float multiplier    = 0.0f;
 
     // Parameters
-    float peak_level    = 0.6f;
-    float sustain_level = 0.2f;
+    float peak_level    = 0.9f;
+    float sustain_level = 0.0001f;
 
-    float attack_time   = 0.1f;
-    float decay_time    = 0.05f;
-    float release_time  = 0.1f;
+    float attack_time   = 0.01f;
+    float decay_time    = 0.5f;
+    float release_time  = 0.001f;
 
 
     void set_multiplier(float start_level, float end_level, float length) {
@@ -290,8 +341,9 @@ double curtime = 0.0f;
 class simple_midi_channel : public midi::channel {
 public:
     simple_midi_channel() {
-        filter_.filter(filter_type::lowpass);
-        filter_.cutoff_frequeny(6000.0f);
+        filter_.filter(filter_type::highpass);
+        filter_.cutoff_frequeny(500.0f);
+        filter_.resonance(0.7f);
     }
 
     simple_midi_channel(const simple_midi_channel&) = delete;
@@ -373,10 +425,6 @@ public:
     }
 
 private:
-    static constexpr int max_polyphony = 32;
-    exp_ramped_value     volume_{0.000001f, 1.0f, 1.0f, 0.2f};
-    panning_device       pan_;
-    biquad_filter        filter_;
 
     struct voice {
         void key_on(piano_key key, uint8_t vel) {
@@ -408,9 +456,9 @@ private:
                 return 0.0f;
             }
 
-            sine_.freq(freq_());
-            const auto out = envelope_(sine_());
-            if (envelope_.is_off()) sine_.ang(0.0f);
+            osc_.freq(freq_());
+            const auto out = envelope_(osc_());
+            if (envelope_.is_off()) osc_.ang(0.0f);
             return out;
         }
 
@@ -421,12 +469,18 @@ private:
         static constexpr float min_freq = 0.001f;
 
         signal_envelope  envelope_;
-        sine_generator   sine_;
+        oscillator       osc_;
         piano_key        key_ = piano_key::OFF;
-        exp_ramped_value freq_{0.000001f, 0.001f, 200000.0f, 0.2f};
+        exp_ramped_value freq_{0.000001f, 0.001f, 20000.0f, 1.0f};
         uint8_t          vel_ = 0;
         int              samples_played_ = 0;
-    } voices[max_polyphony];
+    };
+
+    static constexpr int  max_polyphony = 8;
+    voice                 voices[max_polyphony];
+    exp_ramped_value      volume_{0.000001f, 1.0f, 1.0f, 0.2f};
+    panning_device        pan_;
+    filter_2lp_in_series  filter_;
 
     voice* find_key(piano_key key) {
         auto it = std::find_if(std::begin(voices), std::end(voices), [key](const voice& v) { return v.key() == key; });
@@ -452,7 +506,7 @@ public:
             s.l += ch_sample.l;
             s.r += ch_sample.r;
         }
-        constexpr float boost = 100.0f; // Watch for loud (see below)
+        constexpr float boost = 50.0f; // Watch for loud (see below)
         constexpr float scale = boost * 1.0f / midi::max_channels;
         s.l *= scale;
         s.r *= scale;
@@ -486,6 +540,7 @@ auto makesink(X& x, void (X::*func)(Arg))
 #include <iomanip>
 #include <sstream>
 #include <mutex>
+#include <condition_variable>
 #include "gui.h"
 #include "vis.h"
 
@@ -495,10 +550,10 @@ int main(int argc, const char* argv[])
 {
     try {
         std::string filename;
-        //filename = "../data/onestop.mid";
+        filename = "../data/onestop.mid";
         //filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
         //filename = "../data/Characteristic_rock_drum_pattern.mid";
-        filename = "../data/beethoven_ode_to_joy.mid";
+        //filename = "../data/beethoven_ode_to_joy.mid";
         //filename = "../data/Beethoven_Ludwig_van_-_Beethoven_Symphony_No._5_4th.mid";
         //filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
         //filename = "../data/Blue_Oyster_Cult_-_Don't_Fear_the_Reaper.mid";
@@ -509,16 +564,18 @@ int main(int argc, const char* argv[])
 
         gui g{1000, 400};
         std::mutex data_mutex;
+        std::condition_variable data_cv;
         std::vector<short> data;
         auto& spec_bitmap = g.make_bitmap_window(0, 0, 400, 300);
         auto& max_freq_label = g.make_label("", 0, 300, 400, 100);
+        spectrum_analyzer spec_an{};
         auto& wave_bitmap = g.make_bitmap_window(500, 0, 400, 300);
 
-        auto update = [&]() {
+        g.set_on_idle([&]() {
             std::vector<short> d;
             {
-                std::lock_guard<std::mutex> lock(data_mutex);
-                d = std::move(data);
+                std::unique_lock<std::mutex> lock(data_mutex);
+                data_cv.wait_for(lock, std::chrono::milliseconds(10), [&] { d = std::move(data); return !d.empty(); });
             }
 
             if (d.empty()) return;
@@ -532,17 +589,16 @@ int main(int argc, const char* argv[])
             d.resize(s);
 
             draw_waveform_data(wave_bitmap, d);
-            double freq_max = draw_spetrum_data(spec_bitmap, d, samplerate);
+            double freq_max = spec_an.draw_spetrum_data(spec_bitmap, d);
             std::ostringstream oss;
             oss << "Maximum frequency: " << std::setw(5) << int(freq_max+0.5) << " Hz";
             max_freq_label.text(oss.str());
-        };
+        });
 
         output_dev od{[&]{ return p(); },
             [&](std::vector<short> new_data) {
             std::lock_guard<std::mutex> lock(data_mutex);
             data = std::move(new_data); 
-            g.add_job(update);
         }};
         g.main_loop();
     } catch (const std::exception& e) {

@@ -533,8 +533,9 @@ private:
 
 class gui::impl {
 public:
-    impl(int width, int height) 
-        : font_(default_font())
+    impl(int width, int height)
+        : on_idle_(nullptr)
+        , font_(default_font())
         , main_window_(*main_window::create(width, height)) {
     }
 
@@ -550,64 +551,77 @@ public:
         MSG msg;
         HWND hMainWindow = main_window_.hwnd();
         ShowWindow(hMainWindow, SW_SHOW);
-        while (GetMessage(&msg, nullptr, 0, 0)) {
-#if 0
-            char title[256] = "(null)";
-            char clazz[256] = "(null)";
-            if (msg.hwnd) {
-                GetWindowTextA(msg.hwnd, title, _countof(title));
-                GetClassNameA(msg.hwnd, clazz, _countof(clazz));
-            }
+        for (;;) {
 
-            switch (msg.message) {
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+#if 0
+                char title[256] = "(null)";
+                char clazz[256] = "(null)";
+                if (msg.hwnd) {
+                    GetWindowTextA(msg.hwnd, title, _countof(title));
+                    GetClassNameA(msg.hwnd, clazz, _countof(clazz));
+                }
+
+                switch (msg.message) {
 #define P(m, e) case m: debug_output_stream << msg.hwnd << " " << title << " " << clazz << " " << #m << " " << e << " act " << GetActiveWindow() << " fg " << GetForegroundWindow() <<  std::endl; break
 #define X(m, e) case m: break
-                X(WM_NULL, "");
-                P(WM_SETFOCUS, "");
-                P(WM_KILLFOCUS, "");
-                X(WM_PAINT, "");
-                P(WM_MOUSEACTIVATE, "");
-                X(WM_NCMOUSEMOVE, "");
-                X(WM_KEYDOWN, "");
-                X(WM_KEYUP, "");
-                P(WM_CHAR, "");
-                X(WM_TIMER, "");
-                X(WM_MOUSEMOVE   , (msg.wParam & MK_LBUTTON) << " " << GET_X_LPARAM(msg.lParam) << " " << GET_Y_LPARAM(msg.lParam));
-                P(WM_LBUTTONDOWN , (msg.wParam & MK_LBUTTON) << " " << GET_X_LPARAM(msg.lParam) << " " << GET_Y_LPARAM(msg.lParam));
-                P(WM_LBUTTONUP   , (msg.wParam & MK_LBUTTON) << " " << GET_X_LPARAM(msg.lParam) << " " << GET_Y_LPARAM(msg.lParam));
-                X(WM_NCMOUSEHOVER, "");
-                X(WM_NCMOUSELEAVE, "");
+                    X(WM_NULL, "");
+                    P(WM_SETFOCUS, "");
+                    P(WM_KILLFOCUS, "");
+                    X(WM_PAINT, "");
+                    P(WM_MOUSEACTIVATE, "");
+                    X(WM_NCMOUSEMOVE, "");
+                    X(WM_KEYDOWN, "");
+                    X(WM_KEYUP, "");
+                    P(WM_CHAR, "");
+                    X(WM_TIMER, "");
+                    X(WM_MOUSEMOVE   , (msg.wParam & MK_LBUTTON) << " " << GET_X_LPARAM(msg.lParam) << " " << GET_Y_LPARAM(msg.lParam));
+                    P(WM_LBUTTONDOWN , (msg.wParam & MK_LBUTTON) << " " << GET_X_LPARAM(msg.lParam) << " " << GET_Y_LPARAM(msg.lParam));
+                    P(WM_LBUTTONUP   , (msg.wParam & MK_LBUTTON) << " " << GET_X_LPARAM(msg.lParam) << " " << GET_Y_LPARAM(msg.lParam));
+                    X(WM_NCMOUSEHOVER, "");
+                    X(WM_NCMOUSELEAVE, "");
 
-                X(/*WM_DWMNCRENDERINGCHANGED*/0x031F, "");
-            default:
-                debug_output_stream << msg.hwnd << " " << title << " " << clazz << " " << std::hex << " " << msg.message << std::dec << std::endl;
+                    X(/*WM_DWMNCRENDERINGCHANGED*/0x031F, "");
+                default:
+                    debug_output_stream << msg.hwnd << " " << title << " " << clazz << " " << std::hex << " " << msg.message << std::dec << std::endl;
 #undef X
 #undef P
-            }
+                }
 #endif
 
-            bool handled = false;
-            if (IsWindow(hMainWindow)) {
-                job_queue_.execute_all();
-                auto notify_key_listeners = [&] (bool pressed, WPARAM vk) {
-                    for (auto& l: key_listeners_) {
-                        l(pressed, static_cast<int>(vk));
-                        handled = true;
-                    }
-                };
-                if (msg.message == WM_KEYUP) {
-                    notify_key_listeners(false, msg.wParam);
-                    // HACK: Close main window on escape
-                    if (msg.wParam == VK_ESCAPE) SendMessage(main_window_.hwnd(), WM_CLOSE, 0, 0);
-                } else if (msg.message == WM_KEYDOWN) {
-                    if (((msg.lParam>>30) & 1) == 0) { // Only notify if key was up (to avoid repeats)
-                        notify_key_listeners(true, msg.wParam);
+                if (msg.message == WM_QUIT) {
+                    return;
+                }
+
+                bool handled = false;
+                if (IsWindow(hMainWindow)) {
+                    job_queue_.execute_all();
+                    auto notify_key_listeners = [&] (bool pressed, WPARAM vk) {
+                        for (auto& l: key_listeners_) {
+                            l(pressed, static_cast<int>(vk));
+                            handled = true;
+                        }
+                    };
+                    if (msg.message == WM_KEYUP) {
+                        notify_key_listeners(false, msg.wParam);
+                        // HACK: Close main window on escape
+                        if (msg.wParam == VK_ESCAPE) SendMessage(main_window_.hwnd(), WM_CLOSE, 0, 0);
+                    } else if (msg.message == WM_KEYDOWN) {
+                        if (((msg.lParam>>30) & 1) == 0) { // Only notify if key was up (to avoid repeats)
+                            notify_key_listeners(true, msg.wParam);
+                        }
                     }
                 }
+                //TranslateMessage(&msg); -- We don't care about WM_(SYS)(DEAD)CHAR
+                if (!handled) DispatchMessage(&msg);
             }
-            //TranslateMessage(&msg); -- We don't care about WM_(SYS)(DEAD)CHAR
-            if (!handled) DispatchMessage(&msg);
+
+            if (on_idle_) on_idle_();
         }
+    }
+
+    void set_on_idle(const std::function<void(void)>& on_idle) {
+        on_idle_ = on_idle;
     }
 
     knob& make_knob(int x, int y, int width, int height) {
@@ -629,6 +643,7 @@ public:
     }
 
 private:
+    std::function<void(void)> on_idle_;
     gdi_obj font_;
     main_window& main_window_;
     job_queue job_queue_;
@@ -655,6 +670,11 @@ void gui::main_loop()
 void gui::add_key_listener(key_listener_type key_listener)
 {
     impl_->add_key_listener(key_listener);
+}
+
+void gui::set_on_idle(const std::function<void(void)>& on_idle)
+{
+    impl_->set_on_idle(on_idle);
 }
 
 knob& gui::make_knob(int x, int y, int width, int height)

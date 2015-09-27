@@ -1,4 +1,5 @@
 #include "vis.h"
+#include "constants.h"
 #include <assert.h>
 #include <complex>
 #include <vector>
@@ -125,30 +126,21 @@ void best_fit_resample(std::vector<float>& x, unsigned max_size)
     }
 }
 
-double draw_spetrum_data(bitmap_window& bw, const std::vector<short>& data, int sample_rate)
+double do_draw_spetrum_data(bitmap_window& bw, std::vector<std::complex<float>>& f, std::vector<float>& spectrum, int m)
 {
     const int w = bw.width();
     const int h = bw.height();
 
-    std::vector<std::complex<float>> f(data.size());
-    std::transform(begin(data), end(data), f.begin(), [](short s) { return s * (1.0f/32767.0f); });
-    // Make pow2
-    int m = 0;
-    for (unsigned i = 1; ; i<<=1, m++) {
-        if (f.size() <= i) {
-            f.resize(i);
-            break;
-        }
-    }
+    assert(f.size() == (1ULL<<m));
     fft(f, m);
     f.resize(f.size() / 2); // Ignore negative frequencies
 
-    std::vector<float> spectrum(f.size());
+    spectrum.resize(f.size());
     std::transform(f.begin(), f.end(), spectrum.begin(), [](std::complex<float> c) { return abs(c); });
 
     // Determine max frequency
     const auto index = std::max_element(spectrum.begin() + 1, spectrum.end()) - spectrum.begin(); // +1 because we don't care about DC
-    const auto max_freq = double(index) * 2 * sample_rate / (1<<m);
+    const auto max_freq = double(index) * 2 * samplerate / (1<<m);
 
     // Resample to fit
     best_fit_resample(spectrum, w);
@@ -189,6 +181,41 @@ void draw_waveform_data(bitmap_window& bw, const std::vector<short>& data)
         ly = y;
     }
     bw.update_pixels(&pixels[0]);
+}
+
+class spectrum_analyzer::impl {
+public:
+    impl() {}
+
+    double draw_spetrum_data(bitmap_window& bw, const std::vector<short>& data) {
+        temp_.resize(data.size());
+        std::transform(begin(data), end(data), temp_.begin(), [](short s) { return s * (1.0f/32767.0f); });
+        // Make pow2
+        int m = 0;
+        for (unsigned i = 1; ; i<<=1, m++) {
+            if (temp_.size() <= i) {
+                temp_.resize(i);
+                break;
+            }
+        }
+        return do_draw_spetrum_data(bw, temp_, spectrum_, m);
+    }
+
+private:
+    std::vector<std::complex<float>> temp_;
+    std::vector<float>               spectrum_;
+};
+
+
+spectrum_analyzer::spectrum_analyzer() : impl_(new impl())
+{
+}
+
+spectrum_analyzer::~spectrum_analyzer() = default;
+
+double spectrum_analyzer::draw_spetrum_data(bitmap_window& bw, const std::vector<short>& data)
+{
+    return impl_->draw_spetrum_data(bw, data);
 }
 
 

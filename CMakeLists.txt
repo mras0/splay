@@ -17,7 +17,7 @@ add_definitions("/W4")
 add_definitions("-D_SCL_SECURE_NO_WARNINGS")
 add_definitions("-DUNICODE -D_UNICODE")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi /Zo")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DEBUG")
 
 add_executable(splay main.cpp constants.h wavedev.cpp wavedev.h note.cpp note.h midi.cpp midi.h gui.cpp gui.h job_queue.cpp job_queue.h vis.cpp vis.h filter.cpp filter.h)

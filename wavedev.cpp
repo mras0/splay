@@ -92,6 +92,7 @@ private:
 
     void double_buffer_thread() {
         assert(waveout_.get());
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
         for (;;) {
             int buffer;
             {

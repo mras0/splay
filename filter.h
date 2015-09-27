@@ -132,15 +132,15 @@ public:
 
     void cutoff_frequeny(float freq) {
         freq_ = freq;
+        update_coefficients();
     }
 
     void resonance(float resonance) {
         resonance_ = resonance;
+        update_coefficients();
     }
 
     float next(const float in) {
-        const float f =  2*sin(pi*freq_/samplerate);
-        const float feedback = resonance_ + resonance_/(1 - f);
         buf0_ += f * (in - buf0_ + feedback * (buf0_ - buf1_));
         buf1_ += f * (buf0_ - buf1_);
         switch (type_) {
@@ -153,11 +153,23 @@ public:
     }
 
 public:
+    // Parameters
     filter_type type_ = filter_type::lowpass;
     float freq_ = 0;
     float resonance_ = 0.5f;
+
+    // State
     float buf0_ = 0.0f;
     float buf1_ = 0.0f;
+
+    // Coefficients
+    float f = 0;
+    float feedback = 0;
+
+    void update_coefficients() {
+        f =  2*sin(pi*freq_/samplerate);
+        feedback = resonance_ + resonance_/(1 - f);
+    }
 };
 
 } // namespace splay

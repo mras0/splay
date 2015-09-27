@@ -82,6 +82,8 @@ public:
 
     void main_loop();
 
+    void set_on_idle(const std::function<void(void)>& on_idle);
+
     void add_key_listener(key_listener_type key_listener);
     
     knob& make_knob(int x, int y, int width, int height);
