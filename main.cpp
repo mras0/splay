@@ -228,8 +228,8 @@ private:
     float peak_level    = 0.9f;
     float sustain_level = 0.0001f;
 
-    float attack_time   = 0.01f;
-    float decay_time    = 0.5f;
+    float attack_time   = 0.2f;
+    float decay_time    = 0.8f;
     float release_time  = 0.001f;
 
 
@@ -341,9 +341,6 @@ double curtime = 0.0f;
 class simple_midi_channel : public midi::channel {
 public:
     simple_midi_channel() {
-        filter_.filter(filter_type::highpass);
-        filter_.cutoff_frequeny(500.0f);
-        filter_.resonance(0.7f);
     }
 
     simple_midi_channel(const simple_midi_channel&) = delete;
@@ -420,7 +417,6 @@ public:
         for (auto& v : voices) {
             out += v();
         }
-        out = filter_.next(out);
         return pan_(out * volume_() / max_polyphony);
     }
 
@@ -480,7 +476,6 @@ private:
     voice                 voices[max_polyphony];
     exp_ramped_value      volume_{0.000001f, 1.0f, 1.0f, 0.2f};
     panning_device        pan_;
-    filter_2lp_in_series  filter_;
 
     voice* find_key(piano_key key) {
         auto it = std::find_if(std::begin(voices), std::end(voices), [key](const voice& v) { return v.key() == key; });
@@ -494,6 +489,18 @@ public:
         for (int i = 0; i < midi::max_channels; ++i) {
             p_.set_channel(i, channels_[i]);
         }
+
+        auto ft = filter_type::lowpass;
+        lfilter_.filter(ft);
+        rfilter_.filter(ft);
+
+        auto f  = 5000.0f;
+        lfilter_.cutoff_frequeny(f);
+        rfilter_.cutoff_frequeny(f);
+
+        //auto q  = 0.1f;
+        //lfilter_.resonance(q);
+        //rfilter_.resonance(q);
     }
 
     stereo_sample operator()() {
@@ -511,6 +518,9 @@ public:
         s.l *= scale;
         s.r *= scale;
 
+        s.l = lfilter_.next(s.l);
+        s.r = lfilter_.next(s.r);
+
         if (fabs(s.l) > 1.0f || fabs(s.r) > 1.0f) {
             static bool warn = false;
             if (!warn) {
@@ -522,8 +532,10 @@ public:
     }
 
 private:
-    midi::player        p_;
-    simple_midi_channel channels_[midi::max_channels];
+    midi::player          p_;
+    simple_midi_channel   channels_[midi::max_channels];
+    biquad_filter         lfilter_;
+    biquad_filter         rfilter_;
 };
 
 } // namespace splay
@@ -550,12 +562,12 @@ int main(int argc, const char* argv[])
 {
     try {
         std::string filename;
-        filename = "../data/onestop.mid";
+        //filename = "../data/onestop.mid";
         //filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
         //filename = "../data/Characteristic_rock_drum_pattern.mid";
         //filename = "../data/beethoven_ode_to_joy.mid";
         //filename = "../data/Beethoven_Ludwig_van_-_Beethoven_Symphony_No._5_4th.mid";
-        //filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
+        filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
         //filename = "../data/Blue_Oyster_Cult_-_Don't_Fear_the_Reaper.mid";
         if (argc >= 2) filename = argv[1];
         std::ifstream in(filename, std::ifstream::binary);
