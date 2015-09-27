@@ -29,4 +29,21 @@ std::string piano_key_to_string(piano_key n)
     return note_names[note] + std::to_string(octave);
 }
 
+piano_key key_to_note(int vk) {
+    constexpr piano_key offset = piano_key::A_4;
+    if (vk == 'Z') return offset - 9; // C
+    if (vk == 'S') return offset - 8; // C#
+    if (vk == 'X') return offset - 7; // D
+    if (vk == 'D') return offset - 6; // D#
+    if (vk == 'C') return offset - 5; // E
+    if (vk == 'V') return offset - 4; // F
+    if (vk == 'G') return offset - 3; // F#
+    if (vk == 'B') return offset - 2; // G
+    if (vk == 'H') return offset - 1; // G#
+    if (vk == 'N') return offset - 0; // A
+    if (vk == 'J') return offset + 1; // A#
+    if (vk == 'M') return offset + 2; // B
+    return piano_key::OFF;
+}
+
 } // namespace splay

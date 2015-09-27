@@ -37,6 +37,14 @@ constexpr piano_key operator+(int lhs, piano_key rhs) {
     return rhs + lhs;
 }
 
+constexpr piano_key operator-(piano_key lhs, int rhs) {
+    return static_cast<piano_key>(static_cast<int>(lhs) - rhs);
+}
+
+constexpr piano_key operator-(int lhs, piano_key rhs) {
+    return rhs - lhs;
+}
+
 float note_difference_to_scale(int note_diff);
 
 constexpr bool piano_key_valid(piano_key n)
@@ -47,6 +55,8 @@ constexpr bool piano_key_valid(piano_key n)
 float piano_key_to_freq(piano_key n);
 
 std::string piano_key_to_string(piano_key n);
+
+piano_key key_to_note(int vk);
 
 } // namespace splay
 

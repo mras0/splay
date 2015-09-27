@@ -17,6 +17,12 @@ struct stereo_sample {
     float l;
     float r;
 };
+constexpr stereo_sample operator*(stereo_sample s, float scale) {
+    return { s.l * scale, s.r * scale };
+}
+constexpr stereo_sample operator*(float scale, stereo_sample s) {
+    return s * scale;
+}
 
 using signal_source = std::function<float(void)>;
 using signal_sink   = std::function<void(float)>;
@@ -230,7 +236,7 @@ private:
 
     float attack_time   = 0.2f;
     float decay_time    = 0.8f;
-    float release_time  = 0.001f;
+    float release_time  = 0.1f;
 
 
     void set_multiplier(float start_level, float end_level, float length) {
@@ -417,18 +423,24 @@ public:
         for (auto& v : voices) {
             out += v();
         }
-        return pan_(out * volume_() / max_polyphony);
+        return pan_(out * volume_() * 10.0f / max_polyphony);
     }
 
 private:
 
     struct voice {
+        voice() {
+            filter_.filter(filter_type::lowpass);
+            filter_.cutoff_frequeny(15000.0f);            
+        }
+
         void key_on(piano_key key, uint8_t vel) {
             assert(key != piano_key::OFF);
             assert(vel);
             key_ = key;
             vel_ = vel;
-            freq_(piano_key_to_freq(key_));
+            //freq_(piano_key_to_freq(key_));
+            osc_.freq(piano_key_to_freq(key_));
             samples_played_ = 0;
             envelope_.key_on();
         }
@@ -452,8 +464,10 @@ private:
                 return 0.0f;
             }
 
-            osc_.freq(freq_());
-            const auto out = envelope_(osc_());
+            //osc_.freq(freq_());
+            auto out = osc_();
+            out = filter_(out);
+            out = envelope_(out);
             if (envelope_.is_off()) osc_.ang(0.0f);
             return out;
         }
@@ -467,12 +481,13 @@ private:
         signal_envelope  envelope_;
         oscillator       osc_;
         piano_key        key_ = piano_key::OFF;
-        exp_ramped_value freq_{0.000001f, 0.001f, 20000.0f, 1.0f};
+        //exp_ramped_value freq_{0.000001f, 0.001f, 20000.0f, 1.0f};
+        biquad_filter    filter_;
         uint8_t          vel_ = 0;
         int              samples_played_ = 0;
     };
 
-    static constexpr int  max_polyphony = 8;
+    static constexpr int  max_polyphony = 32;
     voice                 voices[max_polyphony];
     exp_ramped_value      volume_{0.000001f, 1.0f, 1.0f, 0.2f};
     panning_device        pan_;
@@ -489,18 +504,6 @@ public:
         for (int i = 0; i < midi::max_channels; ++i) {
             p_.set_channel(i, channels_[i]);
         }
-
-        auto ft = filter_type::lowpass;
-        lfilter_.filter(ft);
-        rfilter_.filter(ft);
-
-        auto f  = 5000.0f;
-        lfilter_.cutoff_frequeny(f);
-        rfilter_.cutoff_frequeny(f);
-
-        //auto q  = 0.1f;
-        //lfilter_.resonance(q);
-        //rfilter_.resonance(q);
     }
 
     stereo_sample operator()() {
@@ -518,9 +521,6 @@ public:
         s.l *= scale;
         s.r *= scale;
 
-        s.l = lfilter_.next(s.l);
-        s.r = lfilter_.next(s.r);
-
         if (fabs(s.l) > 1.0f || fabs(s.r) > 1.0f) {
             static bool warn = false;
             if (!warn) {
@@ -534,8 +534,6 @@ public:
 private:
     midi::player          p_;
     simple_midi_channel   channels_[midi::max_channels];
-    biquad_filter         lfilter_;
-    biquad_filter         rfilter_;
 };
 
 } // namespace splay
@@ -555,8 +553,11 @@ auto makesink(X& x, void (X::*func)(Arg))
 #include <condition_variable>
 #include "gui.h"
 #include "vis.h"
+#include "job_queue.h"
 
 using namespace splay;
+
+
 
 int main(int argc, const char* argv[])
 {
@@ -566,8 +567,8 @@ int main(int argc, const char* argv[])
         //filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
         //filename = "../data/Characteristic_rock_drum_pattern.mid";
         //filename = "../data/beethoven_ode_to_joy.mid";
-        //filename = "../data/Beethoven_Ludwig_van_-_Beethoven_Symphony_No._5_4th.mid";
-        filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
+        filename = "../data/Beethoven_Ludwig_van_-_Beethoven_Symphony_No._5_4th.mid";
+        //filename = "../data/Led_Zeppelin_-_Stairway_to_Heaven.mid";
         //filename = "../data/Blue_Oyster_Cult_-_Don't_Fear_the_Reaper.mid";
         if (argc >= 2) filename = argv[1];
         std::ifstream in(filename, std::ifstream::binary);
@@ -606,11 +607,36 @@ int main(int argc, const char* argv[])
             oss << "Maximum frequency: " << std::setw(5) << int(freq_max+0.5) << " Hz";
             max_freq_label.text(oss.str());
         });
+        simple_midi_channel ch;
+        job_queue sound_job_queue;
+        bool sound_instrument_edit_mode = false;
+        g.add_key_listener(
+        [&] (bool pressed, int vk) {
+            if (!pressed && vk == 13) {
+                sound_job_queue.push([&sound_instrument_edit_mode] { sound_instrument_edit_mode = !sound_instrument_edit_mode; });
+                return;
+            }
+            auto key = key_to_note(vk);
+            if (key == piano_key::OFF) {
+                return;
+            }
+            sound_job_queue.push([&ch, pressed, key] { pressed  ? ch.note_on(key, 0x40) : ch.note_off(key, 0x40); });
+        });
 
-        output_dev od{[&]{ return p(); },
-            [&](std::vector<short> new_data) {
-            std::lock_guard<std::mutex> lock(data_mutex);
-            data = std::move(new_data); 
+        output_dev od{
+        [&] { 
+            if (sound_instrument_edit_mode) {
+                return 10.0f*ch();
+            } else {
+                return p();
+            }
+        },
+        [&](std::vector<short> new_data) {
+            {
+                std::lock_guard<std::mutex> lock(data_mutex);
+                data = std::move(new_data); 
+            }
+            sound_job_queue.execute_all();
         }};
         g.main_loop();
     } catch (const std::exception& e) {

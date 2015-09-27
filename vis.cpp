@@ -171,7 +171,7 @@ void draw_waveform_data(bitmap_window& bw, const std::vector<short>& data)
     std::vector<unsigned> pixels(w * h, ~0U);
     int lx = 0, ly = h/2;
     for (int i = 0; i < w; ++i) {
-        const auto samp = data[i * data.size() / w] / 32767.0;
+        const auto samp = data[i * data.size() / w] / 32768.0;
         assert(samp >= -1.0 && samp <= 1.0);
 
         int y = int(samp * (h/2-1) + (h/2));

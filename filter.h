@@ -16,7 +16,7 @@ public:
     simple_lowpass_filter() : alpha_(0.5f), last_(0) {
     }
 
-    float next(const float in) {
+    float operator()(const float in) {
         const float out = last_ + alpha_ * (in - last_);
         last_ = out;
         return out;
@@ -94,7 +94,7 @@ public:
         }
     }
 
-    float next(float in) {
+    float operator()(float in) {
         const float out = (amp_in_0 * in)
                         + (amp_in_1 * old_in_1)
                         + (amp_in_2 * old_in_2)
@@ -140,7 +140,7 @@ public:
         update_coefficients();
     }
 
-    float next(const float in) {
+    float operator()(const float in) {
         buf0_ += f * (in - buf0_ + feedback * (buf0_ - buf1_));
         buf1_ += f * (buf0_ - buf1_);
         switch (type_) {
