@@ -342,11 +342,11 @@ void player::impl::tick()
                 std::cout << "Copyright " << std::string(e.data, e.data+e.data_size) << std::endl;
                 break;
             case 0x03: // FF 03 len text Sequence/Track Name
-                std::cout << track_number << " Track name " << std::string(e.data, e.data+e.data_size) << std::endl;
+                std::cout << "Track name (" << track_number << ") " << std::string(e.data, e.data+e.data_size) << std::endl;
                 break;
             case 0x2F: // FF 2F 00 End of Track
                 assert(e.data_size == 0);
-                std::cout << track_number << " End of track" << std::endl;
+                std::cout << "End of track " << track_number << std::endl;
                 break;
             case 0x51: // FF 51 03 tttttt Set Tempo (in microseconds per MIDI quarter-note)
                 {

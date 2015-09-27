@@ -168,11 +168,11 @@ private:
 
     // Parameters
     float peak_level    = 0.9f;
-    float sustain_level = 0.5f;
+    float sustain_level = 0.15f;
 
-    float attack_time   = 0.1f;
-    float decay_time    = 0.1f;
-    float release_time  = 0.5f;
+    float attack_time   = 0.2f;
+    float decay_time    = 0.2f;
+    float release_time  = 0.45f;
 
     // http://www.martin-finke.de/blog/articles/audio-plugins-011-envelopes/
     float calc_multiplier(float start_level, float end_level, float length) {
@@ -250,6 +250,8 @@ private:
     float            time_to_next_tick_ = 0.0f;
 };
 
+double curtime = 0.0f;
+
 class simple_midi_channel : public midi::channel {
 public:
     simple_midi_channel() {
@@ -257,8 +259,10 @@ public:
 
     int index = -1;
 
-    virtual void note_off(piano_key key, uint8_t) override {
+    virtual void note_off(piano_key key, uint8_t) override {        
         if (const auto v = find_key(key)) {
+            //std::cout << curtime << std::endl;
+            //std::cout << index << " " << (v-std::begin(voices)) << " " << piano_key_to_string(key) << " OFF" << std::endl;
             v->key_off();
         } else {
             assert(false);
@@ -270,8 +274,6 @@ public:
             note_off(key, 0);
             return;
         }
-
-        std::cout << piano_key_to_string(key) << " " << int(vel) << std::endl;
 
         // Find voice
         auto v = find_key(key);
@@ -285,6 +287,8 @@ public:
                 v = std::max_element(std::begin(voices), std::end(voices), &voice::compare_samples_played);
             }
         }
+        //std::cout << curtime << std::endl;
+        //std::cout << index << " " << (v-std::begin(voices)) << " " << piano_key_to_string(key) << " " << int(vel) << std::endl;
         v->key_on(key, vel);
     }
 
@@ -323,21 +327,14 @@ public:
 
     stereo_sample operator()() {
         float out = 0.0f;
-        int active = 0;
         for (auto& v : voices) {
-            if (v.active()) {
-                ++active;
-                out += v();
-            }
+            out += v();
         }
-        if (!active) {
-            return { 0.0f, 0.0f };
-        }
-        return pan_(out * volume_ / active);
+        return pan_(out * volume_ / /*max_polyphony*/2);
     }
 
 private:
-    static constexpr int max_polyphony = 8;
+    static constexpr int max_polyphony = 16;
     float                volume_ = 1.0f;
     panning_device       pan_;
 
@@ -376,9 +373,9 @@ private:
     private:
         signal_envelope envelope_;
         sine_generator  sine_;
-        piano_key       key_;
-        uint8_t         vel_;
-        int             samples_played_;
+        piano_key       key_ = piano_key::OFF;
+        uint8_t         vel_ = 0;
+        int             samples_played_ = 0;
     } voices[max_polyphony];
 
     voice* find_key(piano_key key) {
@@ -398,6 +395,7 @@ public:
 
     stereo_sample operator()() {
         p_.advance_time(1.0f / samplerate);
+        curtime += 1.0f / samplerate;
 
         stereo_sample s{0.0f, 0.0f};
         for (auto& ch : channels_) {
@@ -408,7 +406,6 @@ public:
         constexpr float scale = 1.0f / 8.0f;
         s.l *= scale;
         s.r *= scale;
-
         return s;
     }
 
@@ -434,8 +431,8 @@ using namespace splay;
 int main()
 {
     try {
-        //const std::string filename = "../data/onestop.mid";
-        const std::string filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
+        const std::string filename = "../data/onestop.mid";
+        //const std::string filename = "../data/A_natural_minor_scale_ascending_and_descending.mid";
         //const std::string filename = "../data/Characteristic_rock_drum_pattern.mid";
         std::ifstream in(filename, std::ifstream::binary);
         if (!in) throw std::runtime_error("File not found: " + filename);
